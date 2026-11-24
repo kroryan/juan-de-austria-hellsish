@@ -105,6 +105,33 @@ if not mesh.vertex_groups:
     exec(compile(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'heat_weights.py')).read(),
                  'heat_weights.py', 'exec'))
 
+# Iron cuirass: the breast and back plates are one rigid piece on the chest
+# (Spine1). The source rig spreads them over Hips/Spine/Spine1 like cloth, so
+# a twist of the spine bent the plates and their gold stripes. Above the belt
+# all lower-trunk weight goes to the chest; the plates only articulate at the
+# belt (a 6 cm band). On the front and back of the chest the clavicle and
+# upper-arm weights are also handed to the chest, fading out towards the
+# pauldrons, so raising an arm does not dent the breastplate.
+BELT_Z, BELT_BAND = 1.18, .03
+CORE_X, SIDE_X = .12, .17
+neck_z = J['Neck']['head'].z
+for i, v in enumerate(mesh.data.vertices):
+    co = v.co
+    if co.z < BELT_Z - BELT_BAND or co.z > neck_z: continue
+    w = per_vertex[i]
+    t = min(1., (co.z - (BELT_Z - BELT_BAND)) / (2 * BELT_BAND))
+    lower = w.pop('Hips', 0) + w.pop('Spine', 0)
+    if lower * (1 - t) > 0: w['Spine'] = lower * (1 - t)
+    w['Spine1'] = w.get('Spine1', 0) + lower * t
+    if t >= 1:
+        f = min(1., max(0., (SIDE_X - abs(co.x)) / (SIDE_X - CORE_X)))
+        if f > 0:
+            for n in [n for n in w if n.endswith(('Shoulder', 'Arm')) and not n.endswith('ForeArm')]:
+                x = w[n] * f; w[n] -= x; w['Spine1'] += x
+    tot = sum(w.values())
+    if tot > 0: per_vertex[i] = {n: x / tot for n, x in w.items() if x / tot > 1e-4}
+print('RIGID_CUIRASS belt_z', BELT_Z, flush=True)
+
 # Rigid head: faces fully owned by the head (face, hair, hat).
 head_faces = set()
 for p in mesh.data.polygons:
