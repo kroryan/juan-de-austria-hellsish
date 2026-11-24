@@ -135,8 +135,9 @@ print('RIGID_CUIRASS belt_z', BELT_Z, flush=True)
 # Rigid head: faces fully owned by the head (face, hair, hat).
 head_faces = set()
 for p in mesh.data.polygons:
-    # Long hair: a looser threshold keeps more of the locks in the rigid head.
-    if p.center.z > 1.42 and all(per_vertex[i].get('Head', 0) >= .35 for i in p.vertices):
+    # Only the face and skull are rigid (Juan's source rig gives them ~0.7 Head): the long locks stay out of the head part so a
+    # head turn can be spread along their whole length (see the hair fade below).
+    if p.center.z > 1.42 and all(per_vertex[i].get('Head', 0) >= .6 for i in p.vertices):
         head_faces.add(p.index)
 head_verts = {i for f in head_faces for i in mesh.data.polygons[f].vertices}
 body_verts = {i for p in mesh.data.polygons if p.index not in head_faces for i in p.vertices}
@@ -145,12 +146,12 @@ for i in head_verts: per_vertex[i] = {'Head': 1.}
 
 # Hanging hair below the rigid head: the head's share fades smoothly along the
 # locks. It is 1 at the head seam and falls off over HAIR_FADE (geodesic
-# distance), and it is 0 where the hair touches the coat or armour, rising over
-# CONTACT_FADE. The hair stays attached to the back, the shoulders keep their
+# distance), and it is 0 where the hair touches the coat or armour; in between it
+# follows the position along the lock. The hair stays attached to the back, the shoulders keep their
 # own weights, and a head turn is spread along the locks instead of folding
 # them at one line.
 import heapq
-HAIR_FADE, CONTACT_FADE = .30, .08
+HAIR_FADE = .45  # Juan's locks are long and spread over the shoulders
 nbr = [[] for _ in mesh.data.vertices]
 for e in mesh.data.edges:
     a, b = e.vertices; d = (mesh.data.vertices[a].co - mesh.data.vertices[b].co).length
@@ -171,10 +172,13 @@ d_seam = geodesic(seam, HAIR_FADE)
 band = [i for i in d_seam if i not in head_verts]
 bset = set(band)
 contact = [i for i in band if any(j not in head_verts and not is_hair(j) for j, _ in nbr[i])]
-d_coat = geodesic(contact, CONTACT_FADE)
+d_coat = geodesic(contact, HAIR_FADE)
 def smooth(x): x = min(1., max(0., x)); return x * x * (3 - 2 * x)
 for i in band:
-    s = (1 - smooth(d_seam[i] / HAIR_FADE)) * smooth(d_coat.get(i, CONTACT_FADE) / CONTACT_FADE)
+    # Position along the lock between the head (1) and where it rests on the armour (0),
+    # so the turn is spread evenly over the whole lock, however long it is.
+    ds, dc = d_seam[i], d_coat.get(i, HAIR_FADE)
+    s = smooth(dc / (ds + dc + 1e-6)) * (1 - smooth(ds / HAIR_FADE))
     w = {n: v * (1 - s) for n, v in per_vertex[i].items()}; w['Head'] = w.get('Head', 0) + s
     per_vertex[i] = w
 print('HAIR_FADE head_faces', len(head_faces), 'band_vertices', len(band), 'coat_contact', len(contact), flush=True)
