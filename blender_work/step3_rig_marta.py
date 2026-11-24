@@ -108,12 +108,41 @@ if not mesh.vertex_groups:
 # Rigid head: faces fully owned by the head (face, hair, hat).
 head_faces = set()
 for p in mesh.data.polygons:
-    if p.center.z > 1.45 and all(per_vertex[i].get('Head', 0) >= .5 for i in p.vertices):
+    # Long hair: a looser threshold keeps more of the locks in the rigid head.
+    if p.center.z > 1.42 and all(per_vertex[i].get('Head', 0) >= .35 for i in p.vertices):
         head_faces.add(p.index)
 head_verts = {i for f in head_faces for i in mesh.data.polygons[f].vertices}
 body_verts = {i for p in mesh.data.polygons if p.index not in head_faces for i in p.vertices}
 seam = head_verts & body_verts
 for i in head_verts: per_vertex[i] = {'Head': 1.}
+
+# Hanging hair below the rigid head: diffuse the weights from the head seam
+# over ~12 cm of the locks, so a head turn is shared along the hair instead
+# of folding it at the seam line.
+import heapq
+nbr = [[] for _ in mesh.data.vertices]
+for e in mesh.data.edges:
+    a, b = e.vertices; d = (mesh.data.vertices[a].co - mesh.data.vertices[b].co).length
+    nbr[a].append((b, d)); nbr[b].append((a, d))
+dist = {i: 0. for i in seam}; heap = [(0., i) for i in seam]
+while heap:
+    d, i = heapq.heappop(heap)
+    if d > dist.get(i, 1e9) or d > .12: continue
+    for j, dd in nbr[i]:
+        if j in head_verts: continue
+        nd = d + dd
+        if nd < dist.get(j, 1e9) and nd <= .12:
+            dist[j] = nd; heapq.heappush(heap, (nd, j))
+band = [i for i in dist if i not in head_verts]
+for _ in range(12):
+    new = {}
+    for i in band:
+        acc = {n: x * .4 for n, x in per_vertex[i].items()}; share = .6 / max(1, len(nbr[i]))
+        for j, _ in nbr[i]:
+            for n, x in per_vertex[j].items(): acc[n] = acc.get(n, 0.) + x * share
+        tot = sum(acc.values()); new[i] = {n: x / tot for n, x in acc.items() if x / tot > 1e-4}
+    for i, w in new.items(): per_vertex[i] = w
+print('HAIR_TRANSITION head_faces', len(head_faces), 'band_vertices', len(band), flush=True)
 
 while mesh.vertex_groups: mesh.vertex_groups.remove(mesh.vertex_groups[0])
 groups = {}
@@ -194,6 +223,14 @@ for n, e in (('Spine', (12, 18, 6)), ('Spine1', (10, 24, 8))):
     pb = arm.pose.bones[n]; pb.rotation_mode = 'XYZ'; pb.rotation_euler = [math.radians(a) for a in e]
 point('RightArm', 'RightForeArm', (-.25, -.7, -.25)); point('RightForeArm', 'RightHand', (.15, -.8, .15))
 render('test_twist_back', (-1.5, 4, 1.2)); render('test_twist_side', (4, .8, 1.2))
+for pb in arm.pose.bones: pb.matrix_basis = Matrix.Identity(4)
+bpy.context.view_layer.update()
+# Head turn: checks that the long hair follows smoothly without folding.
+for n, e in (('Neck', (8, 20, 4)), ('Head', (12, 30, 8))):
+    pb = arm.pose.bones[n]; pb.rotation_mode = 'XYZ'; pb.rotation_euler = [math.radians(a) for a in e]
+cam.data.ortho_scale = .8
+render('test_head_turn_back', (1.2, 3.5, 1.5), (0, 0, 1.45)); render('test_head_turn_side', (3.6, -.6, 1.5), (0, 0, 1.45))
+cam.data.ortho_scale = 2.3
 for pb in arm.pose.bones: pb.matrix_basis = Matrix.Identity(4)
 bpy.context.view_layer.update()
 cam.data.ortho_scale = .55; render('head_closeup', (0, -4, 1.62), (0, 0, 1.62)); render('head_side', (4, 0, 1.62), (0, 0, 1.62))
